@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+out/
+build/
+
+# Local configuration and user data (CRITICAL: Never commit vault secrets or user data)
+*.tmp
+*.bak
+config.json
+vault.json
+*.log
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo

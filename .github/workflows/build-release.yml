@@ -1,0 +1,75 @@
+name: Build & Release LocalVault
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - 'README.md'
+      - '.gitignore'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows App (.exe) and Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Generate New Version Tag
+        id: vars
+        shell: bash
+        run: |
+          RUN_COUNT=${{ github.run_number }}
+          VERSION="1.0.${RUN_COUNT}"
+          TAG="v${VERSION}"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "TAG=${TAG}" >> $GITHUB_ENV
+          echo "Building version ${VERSION} (Tag: ${TAG})"
+
+      - name: Update package.json version
+        shell: bash
+        run: |
+          npm version ${{ env.VERSION }} --no-git-tag-version
+
+      - name: Build Windows Executable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build
+
+      - name: Create GitHub Release and Upload Exe
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: LocalVault ${{ env.TAG }}
+          body: |
+            ## LocalVault Release ${{ env.TAG }}
+            
+            ### Automated CI/CD Release
+            - Built executable for Windows (x64 NSIS Installer).
+            - Fully offline, AES-256 encrypted password manager.
+            
+            ### Downloads
+            Download and run the installer below:
+          draft: false
+          prerelease: false
+          files: |
+            dist/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

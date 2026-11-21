@@ -1,0 +1,49 @@
+{
+  "name": "localvault",
+  "productName": "LocalVault",
+  "version": "1.0.0",
+  "description": "Fully local, offline, AES-256 encrypted password manager.",
+  "main": "main.js",
+  "author": "katrate",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.katrate.localvault",
+    "productName": "LocalVault",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "vault.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LocalVault"
+    }
+  }
+}
