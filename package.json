@@ -25,6 +25,7 @@
       "main.js",
       "preload.js",
       "preload-unlock.js",
+      "preload-lock.js",
       "vault.js",
       "file-locker.js",
       "renderer/**/*",

@@ -10,6 +10,8 @@ const FL = require('./file-locker');
 let win = null;
 let unlockWin = null;         // small floating unlock dialog
 let pendingUnlockPath = null; // .lvlock path pending in the dialog
+let lockWin = null;           // small floating lock dialog
+let pendingLockPath = null;   // path to lock via right-click context menu
 let authed = false;
 let authedLoginId = '';
 let cfg = null;
@@ -533,28 +535,38 @@ function registerShellAssociation() {
   try {
     const isPackaged = app.isPackaged;
     const exePath = process.execPath;
-    // When running in dev via electron.exe, we must pass the app directory so electron knows what to run
+
+    // Open command for .lvlock double-click (unlock dialog)
     const openCmd = isPackaged
       ? `"${exePath}" "%1"`
       : `"${exePath}" "${path.resolve(__dirname)}" "%1"`;
 
-    require('child_process').spawnSync('reg', [
-      'add', 'HKCU\\Software\\Classes\\.lvlock', '/ve', '/d', 'LocalVault.Lock', '/f',
-    ], { stdio: 'pipe' });
-    require('child_process').spawnSync('reg', [
-      'add', 'HKCU\\Software\\Classes\\LocalVault.Lock', '/ve', '/d', 'LocalVault Encrypted File', '/f',
-    ], { stdio: 'pipe' });
-    require('child_process').spawnSync('reg', [
-      'add', 'HKCU\\Software\\Classes\\LocalVault.Lock\\shell\\open\\command',
-      '/ve', '/d', openCmd, '/f',
-    ], { stdio: 'pipe' });
-    // Icon
-    require('child_process').spawnSync('reg', [
-      'add', 'HKCU\\Software\\Classes\\LocalVault.Lock\\DefaultIcon',
-      '/ve', '/d', `"${exePath}",0`, '/f',
-    ], { stdio: 'pipe' });
+    // Lock command for right-click context menu (lock dialog)
+    const lockCmd = isPackaged
+      ? `"${exePath}" "--lock" "%1"`
+      : `"${exePath}" "${path.resolve(__dirname)}" "--lock" "%1"`;
+
+    const reg = (args) => require('child_process').spawnSync('reg', args, { stdio: 'pipe' });
+
+    // --- .lvlock file type association (double-click to unlock) ---
+    reg(['add', 'HKCU\\Software\\Classes\\.lvlock', '/ve', '/d', 'LocalVault.Lock', '/f']);
+    reg(['add', 'HKCU\\Software\\Classes\\LocalVault.Lock', '/ve', '/d', 'LocalVault Encrypted File', '/f']);
+    reg(['add', 'HKCU\\Software\\Classes\\LocalVault.Lock\\shell\\open\\command', '/ve', '/d', openCmd, '/f']);
+    reg(['add', 'HKCU\\Software\\Classes\\LocalVault.Lock\\DefaultIcon', '/ve', '/d', `"${exePath}",0`, '/f']);
+
+    // --- Right-click context menu: "Lock with LocalVault" for all files ---
+    reg(['add', 'HKCU\\Software\\Classes\\*\\shell\\LockWithLocalVault', '/ve', '/d', 'Lock with LocalVault', '/f']);
+    reg(['add', 'HKCU\\Software\\Classes\\*\\shell\\LockWithLocalVault', '/v', 'Icon', '/d', `"${exePath}",0`, '/f']);
+    reg(['add', 'HKCU\\Software\\Classes\\*\\shell\\LockWithLocalVault\\command', '/ve', '/d', lockCmd, '/f']);
+
+    // --- Right-click context menu: "Lock with LocalVault" for folders ---
+    reg(['add', 'HKCU\\Software\\Classes\\Directory\\shell\\LockWithLocalVault', '/ve', '/d', 'Lock with LocalVault', '/f']);
+    reg(['add', 'HKCU\\Software\\Classes\\Directory\\shell\\LockWithLocalVault', '/v', 'Icon', '/d', `"${exePath}",0`, '/f']);
+    reg(['add', 'HKCU\\Software\\Classes\\Directory\\shell\\LockWithLocalVault\\command', '/ve', '/d', lockCmd, '/f']);
+
+    console.log('[Shell] Registered .lvlock association + right-click context menu.');
   } catch (e) {
-    console.error('[Shell] Could not register .lvlock association:', e.message);
+    console.error('[Shell] Could not register shell association:', e.message);
   }
 }
 
@@ -813,6 +825,81 @@ ipcMain.on('unlock-dialog-done', () => {
   if (unlockWin && !unlockWin.isDestroyed()) unlockWin.close();
 });
 
+/* ------------------------------ Lock Dialog Window ------------------------------ */
+
+function createLockDialog(targetPath) {
+  if (lockWin && !lockWin.isDestroyed()) {
+    pendingLockPath = targetPath;
+    lockWin.focus();
+    return;
+  }
+
+  pendingLockPath = targetPath;
+  const iconPath = path.join(__dirname, 'assets', 'logo.png');
+
+  lockWin = new BrowserWindow({
+    width: 420,
+    height: 360,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    backgroundColor: '#0f172a',
+    title: 'Lock with LocalVault',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    frame: true,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-lock.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  lockWin.removeMenu();
+  lockWin.loadFile(path.join(__dirname, 'renderer', 'lock-dialog.html'));
+  lockWin.once('ready-to-show', () => lockWin.show());
+
+  lockWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  lockWin.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://')) event.preventDefault();
+  });
+
+  lockWin.on('closed', () => {
+    lockWin = null;
+    pendingLockPath = null;
+    if (!win || win.isDestroyed()) {
+      app.quit();
+    }
+  });
+}
+
+// IPC handlers for the lock dialog
+ipcMain.handle('lock-dialog-get-path', () => pendingLockPath);
+
+ipcMain.handle('lock-dialog-lock', async (_e, revealPass) => {
+  try {
+    if (!pendingLockPath) return fail('No file path set.');
+    if (!revealPass) return fail('Password is required.');
+    if (!fs.existsSync(pendingLockPath)) return fail('File or folder not found: ' + pendingLockPath);
+
+    const lockPath = FL.lockItem(pendingLockPath, revealPass, () => {});
+    return ok({ lockPath });
+  } catch (e) {
+    return fail(e.message);
+  }
+});
+
+ipcMain.on('lock-dialog-cancel', () => {
+  if (lockWin && !lockWin.isDestroyed()) lockWin.close();
+});
+
+ipcMain.on('lock-dialog-done', () => {
+  if (lockWin && !lockWin.isDestroyed()) lockWin.close();
+});
+
 /* ------------------------------ Main Window ------------------------------ */
 
 function createWindow(lockFilePath) {
@@ -861,11 +948,21 @@ function createWindow(lockFilePath) {
 app.whenReady().then(() => {
   const args = process.argv.slice(app.isPackaged ? 1 : 2);
   const lockArg = args.find((a) => a.endsWith('.lvlock') && fs.existsSync(a));
+  const lockFileArg = (() => {
+    const idx = args.indexOf('--lock');
+    if (idx !== -1 && args[idx + 1]) return args[idx + 1];
+    // Also support: LocalVault.exe --lock "C:\path\file.txt"
+    const flag = args.find((a) => a.startsWith('--lock='));
+    return flag ? flag.slice(7) : null;
+  })();
 
   registerShellAssociation();
 
-  if (lockArg) {
-    // Opened by double-clicking a .lvlock file — show ONLY the small unlock dialog
+  if (lockFileArg) {
+    // Launched from right-click "Lock with LocalVault" — show lock dialog only
+    createLockDialog(lockFileArg);
+  } else if (lockArg) {
+    // Launched by double-clicking a .lvlock file — show unlock dialog only
     createUnlockDialog(lockArg);
   } else {
     // Normal launch — open the full app
@@ -877,13 +974,18 @@ app.whenReady().then(() => {
   });
 });
 
-// Second-instance: another .lvlock double-clicked while app is already running
+// Second-instance: another file double-clicked or right-clicked while app is already running
 app.on('second-instance', (_e, argv) => {
   const args = argv.slice(app.isPackaged ? 1 : 2);
   const lockArg = args.find((a) => a.endsWith('.lvlock') && fs.existsSync(a));
+  const lockFileIdx = args.indexOf('--lock');
+  const lockFileArg = lockFileIdx !== -1 ? args[lockFileIdx + 1] : null;
 
-  if (lockArg) {
-    // Always show the small dialog for file unlocks, regardless of whether main win is open
+  if (lockFileArg) {
+    // Right-click lock from Explorer while app is running
+    createLockDialog(lockFileArg);
+  } else if (lockArg) {
+    // Double-click .lvlock while app is running
     createUnlockDialog(lockArg);
   } else if (win) {
     if (win.isMinimized()) win.restore();
