@@ -18,6 +18,10 @@
   "build": {
     "appId": "com.katrate.localvault",
     "productName": "LocalVault",
+    "compression": "maximum",
+    "electronLanguages": [
+      "en-US"
+    ],
     "directories": {
       "output": "dist"
     },
