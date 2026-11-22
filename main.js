@@ -5,13 +5,23 @@ const https = require('https');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const V = require('./vault');
+const FL = require('./file-locker');
 
 let win = null;
-let authed = false; // session flag: has the login ID/password been entered?
-let authedLoginId = ''; // lowercase login ID of authenticated session
-let cfg = null; // config.json contents (hashes + wrapped master key)
-let lastSecret = ''; // last password copied, so we can wipe the clipboard
-let clipTimer = null; // clipboard auto-clear timer
+let authed = false;
+let authedLoginId = '';
+let cfg = null;
+let lastSecret = '';
+let clipTimer = null;
+
+// Track if app was opened by double-clicking a .lvlock file
+let openedLockFile = null;
+
+// Single instance lock — allows second-instance to send the .lvlock path to running instance
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
 const dbFile = () => path.join(app.getPath('userData'), 'vault.json');
@@ -413,6 +423,139 @@ ipcMain.handle('reset-vault', () => {
   }
 });
 
+/* --------------------------- File Locker IPC --------------------------- */
+
+// Lock a file or folder
+ipcMain.handle('fl-lock', async (_e, { targetPath, revealPass }) => {
+  try {
+    if (!targetPath) return fail('No path provided.');
+    if (!revealPass) return fail('Reveal pass is required.');
+    if (!fs.existsSync(targetPath)) return fail('Path does not exist: ' + targetPath);
+
+    const lockPath = FL.lockItem(targetPath, revealPass, (progress) => {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('fl-lock-progress', progress);
+      }
+    });
+
+    return ok({ lockPath });
+  } catch (e) {
+    return fail(e.message);
+  }
+});
+
+// Unlock a .lvlock file — used both from vault UI and from shell open
+ipcMain.handle('fl-unlock', async (_e, { lockPath, revealPass }) => {
+  try {
+    if (!lockPath) return fail('No .lvlock path provided.');
+    if (!revealPass) return fail('Reveal pass is required.');
+    if (!fs.existsSync(lockPath)) return fail('File not found: ' + lockPath);
+
+    const restoredPath = FL.unlockItem(lockPath, revealPass, (progress) => {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('fl-unlock-progress', progress);
+      }
+    });
+
+    return ok({ restoredPath });
+  } catch (e) {
+    return fail(e.message);
+  }
+});
+
+// Let renderer ask for the pending lock file (opened via double-click)
+ipcMain.handle('fl-get-pending', () => {
+  const p = openedLockFile;
+  openedLockFile = null; // consume it
+  return ok({ lockPath: p });
+});
+
+// Open a native browse dialog for file or folder
+ipcMain.handle('fl-browse', async (_e, { mode }) => {
+  try {
+    const properties = mode === 'folder'
+      ? ['openDirectory']
+      : ['openFile'];
+    const res = await dialog.showOpenDialog(win, {
+      title: mode === 'folder' ? 'Select a folder to lock' : 'Select a file to lock',
+      properties,
+    });
+    if (res.canceled || !res.filePaths.length) return ok({ canceled: true });
+    return ok({ filePath: res.filePaths[0] });
+  } catch (e) {
+    return fail(e.message);
+  }
+});
+
+// Get locked items list from db
+ipcMain.handle('fl-list', () => {
+  try {
+    requireAuth();
+    const db = loadDb();
+    return ok({ items: db.lockedFiles || [] });
+  } catch (e) {
+    return fail(e.message);
+  }
+});
+
+// Save a locked item record to db
+ipcMain.handle('fl-add-record', (_e, { lockPath, originalName, kind, lockedAt }) => {
+  try {
+    requireAuth();
+    const db = loadDb();
+    if (!db.lockedFiles) db.lockedFiles = [];
+    db.lockedFiles.push({ id: crypto.randomUUID(), lockPath, originalName, kind, lockedAt });
+    saveDb(db);
+    return ok();
+  } catch (e) {
+    return fail(e.message);
+  }
+});
+
+// Remove a locked item record from db
+ipcMain.handle('fl-remove-record', (_e, { id }) => {
+  try {
+    requireAuth();
+    const db = loadDb();
+    db.lockedFiles = (db.lockedFiles || []).filter((x) => x.id !== id);
+    saveDb(db);
+    return ok();
+  } catch (e) {
+    return fail(e.message);
+  }
+});
+
+// Register .lvlock shell association in Windows registry (run on app start)
+function registerShellAssociation() {
+  if (process.platform !== 'win32') return;
+  try {
+    const isPackaged = app.isPackaged;
+    const exePath = process.execPath;
+    // When running in dev via electron.exe, we must pass the app directory so electron knows what to run
+    const openCmd = isPackaged
+      ? `"${exePath}" "%1"`
+      : `"${exePath}" "${path.resolve(__dirname)}" "%1"`;
+
+    require('child_process').spawnSync('reg', [
+      'add', 'HKCU\\Software\\Classes\\.lvlock', '/ve', '/d', 'LocalVault.Lock', '/f',
+    ], { stdio: 'pipe' });
+    require('child_process').spawnSync('reg', [
+      'add', 'HKCU\\Software\\Classes\\LocalVault.Lock', '/ve', '/d', 'LocalVault Encrypted File', '/f',
+    ], { stdio: 'pipe' });
+    require('child_process').spawnSync('reg', [
+      'add', 'HKCU\\Software\\Classes\\LocalVault.Lock\\shell\\open\\command',
+      '/ve', '/d', openCmd, '/f',
+    ], { stdio: 'pipe' });
+    // Icon
+    require('child_process').spawnSync('reg', [
+      'add', 'HKCU\\Software\\Classes\\LocalVault.Lock\\DefaultIcon',
+      '/ve', '/d', `"${exePath}",0`, '/f',
+    ], { stdio: 'pipe' });
+  } catch (e) {
+    console.error('[Shell] Could not register .lvlock association:', e.message);
+  }
+}
+
 /* --------------------------- Auto-Update IPC --------------------------- */
 
 const GITHUB_REPO = 'katrate/localvault';
@@ -582,7 +725,7 @@ ipcMain.handle('download-and-install-update', async (_e, assetUrl) => {
 
 /* ------------------------------ window ------------------------------ */
 
-function createWindow() {
+function createWindow(lockFilePath) {
   const iconPath = path.join(__dirname, 'assets', 'logo.png');
   win = new BrowserWindow({
     width: 1080,
@@ -600,6 +743,10 @@ function createWindow() {
       sandbox: false,
     },
   });
+
+  if (lockFilePath) {
+    openedLockFile = lockFilePath;
+  }
 
   win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
     console.log(`[Renderer] (${line}): ${message}`);
@@ -622,10 +769,29 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  createWindow();
+  // Check if opened with a .lvlock file argument (double-click from Explorer)
+  const args = process.argv.slice(app.isPackaged ? 1 : 2);
+  const lockArg = args.find((a) => a.endsWith('.lvlock') && fs.existsSync(a));
+
+  registerShellAssociation();
+  createWindow(lockArg || null);
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+// Handle second-instance: if user double-clicks another .lvlock while app is running
+app.on('second-instance', (_e, argv) => {
+  const args = argv.slice(app.isPackaged ? 1 : 2);
+  const lockArg = args.find((a) => a.endsWith('.lvlock') && fs.existsSync(a));
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    if (lockArg) {
+      win.webContents.send('fl-open-lock-file', lockArg);
+    }
+  }
 });
 
 app.on('window-all-closed', () => {

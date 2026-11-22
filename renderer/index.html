@@ -83,6 +83,18 @@
     <symbol id="icon-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
     </symbol>
+    <symbol id="icon-folder-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 20H4a2 2 0 0 1-2-2V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H20a2 2 0 0 1 2 2v2.5"/><rect x="13" y="14" width="8" height="6" rx="1"/><path d="M15 14v-2a2 2 0 0 1 4 0v2"/>
+    </symbol>
+    <symbol id="icon-file-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h8"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><rect x="13" y="14" width="8" height="6" rx="1"/><path d="M15 14v-2a2 2 0 0 1 4 0v2"/>
+    </symbol>
+    <symbol id="icon-shield-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M19.69 14a6.9 6.9 0 0 0 .31-2V5l-8-3-3.16 1.18"/><path d="m2 2 20 20"/><path d="M4.73 4.73 4 5v7c0 6 8 10 8 10a20.29 20.29 0 0 0 5.62-4.38"/>
+    </symbol>
+    <symbol id="icon-folder-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
+    </symbol>
   </svg>
 
   <!-- ======================= FIRST RUN: SETUP ======================= -->
@@ -221,6 +233,9 @@
         <button id="btn-lock" class="btn ghost" title="Lock vault (Ctrl+L)">
           <svg class="icon sm"><use href="#icon-lock"></use></svg> Lock
         </button>
+        <button id="btn-filelock" class="btn ghost" title="File & Folder Lock">
+          <svg class="icon sm"><use href="#icon-folder-lock"></use></svg> File Lock
+        </button>
       </div>
     </header>
 
@@ -271,6 +286,123 @@
       </div>
     </main>
   </section>
+
+  <!-- ======================= FILE LOCK MODAL ======================= -->
+  <div id="modal-filelock" class="overlay hidden">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3>
+          <svg class="icon"><use href="#icon-folder-lock"></use></svg>
+          <span>File & Folder Lock</span>
+        </h3>
+        <button type="button" class="btn-close" data-close>
+          <svg class="icon sm"><use href="#icon-x"></use></svg>
+        </button>
+      </div>
+      <p class="muted small-text">Encrypt files or folders with AES-256. Locked items become <code>.lvlock</code> files — double-click anywhere to unlock with your reveal pass.</p>
+
+      <!-- Lock Tab -->
+      <div class="filelock-tabs">
+        <button class="tab-btn active" data-filetab="fl-tab-lock">
+          <svg class="icon sm"><use href="#icon-lock"></use></svg> Lock
+        </button>
+        <button class="tab-btn" data-filetab="fl-tab-locked">
+          <svg class="icon sm"><use href="#icon-folder-lock"></use></svg> Locked Items
+        </button>
+      </div>
+
+      <!-- Lock a new file/folder -->
+      <div class="tab-pane active" id="fl-tab-lock" style="max-height: none; overflow: visible;">
+        <div class="fl-dropzone" id="fl-dropzone">
+          <svg class="icon xl" style="color: var(--accent); opacity: 0.6;"><use href="#icon-folder-open"></use></svg>
+          <p style="margin: 8px 0 4px; font-weight: 600;">Drag & drop a file or folder here</p>
+          <p class="muted small-text">or browse manually below</p>
+        </div>
+
+        <div class="fl-path-row">
+          <input type="text" id="fl-path-input" placeholder="Or paste / type full path here…" autocomplete="off">
+          <button type="button" class="btn ghost" id="fl-browse-btn">
+            <svg class="icon sm"><use href="#icon-folder-open"></use></svg> Browse
+          </button>
+        </div>
+
+        <div id="fl-selected-preview" class="fl-preview hidden">
+          <svg class="icon sm" id="fl-preview-icon"><use href="#icon-file-lock"></use></svg>
+          <span id="fl-preview-name" class="fl-preview-name"></span>
+          <button type="button" class="btn-close" id="fl-clear-selection" title="Clear">
+            <svg class="icon sm"><use href="#icon-x"></use></svg>
+          </button>
+        </div>
+
+        <div class="fl-pass-row">
+          <label>Reveal pass (required to lock & unlock)
+            <div class="pw-input-wrap">
+              <input type="password" id="fl-lock-pass" placeholder="Your reveal pass" autocomplete="off">
+              <button type="button" class="btn-toggle-pw" tabindex="-1">
+                <svg class="icon sm"><use href="#icon-eye"></use></svg>
+              </button>
+            </div>
+          </label>
+        </div>
+
+        <p class="error" id="fl-lock-error"></p>
+        <div id="fl-lock-progress" class="hidden" style="margin: 8px 0;">
+          <p class="muted small-text" id="fl-lock-status">Encrypting…</p>
+          <div style="background: rgba(255,255,255,0.08); border-radius: 8px; height: 7px; overflow: hidden; margin-top: 6px;">
+            <div id="fl-lock-bar" style="background: var(--accent); width: 0%; height: 100%; transition: width 0.2s;"></div>
+          </div>
+        </div>
+
+        <div class="row end" style="margin-top: 14px;">
+          <button type="button" class="btn ghost" data-close>Cancel</button>
+          <button type="button" class="btn primary" id="fl-lock-btn" disabled>
+            <svg class="icon sm"><use href="#icon-lock"></use></svg> Lock it
+          </button>
+        </div>
+      </div>
+
+      <!-- Locked items list -->
+      <div class="tab-pane hidden" id="fl-tab-locked" style="max-height: none; overflow: visible;">
+        <div id="fl-locked-list" class="fl-locked-list">
+          <p class="muted small-text" id="fl-no-locked">No locked items yet.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= FILE UNLOCK MODAL (opened by .lvlock double-click) ======================= -->
+  <div id="modal-file-unlock" class="overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>
+          <svg class="icon"><use href="#icon-lock"></use></svg>
+          <span>Unlock File</span>
+        </h3>
+      </div>
+      <p class="muted small-text" id="file-unlock-name" style="margin-bottom: 14px; word-break: break-all;"></p>
+      <label>Reveal pass
+        <div class="pw-input-wrap">
+          <input type="password" id="file-unlock-pass" placeholder="Your reveal pass" autocomplete="off">
+          <button type="button" class="btn-toggle-pw" tabindex="-1">
+            <svg class="icon sm"><use href="#icon-eye"></use></svg>
+          </button>
+        </div>
+      </label>
+      <p class="error" id="file-unlock-error"></p>
+      <div id="fl-unlock-progress" class="hidden" style="margin: 8px 0;">
+        <p class="muted small-text" id="fl-unlock-status">Decrypting…</p>
+        <div style="background: rgba(255,255,255,0.08); border-radius: 8px; height: 7px; overflow: hidden; margin-top: 6px;">
+          <div id="fl-unlock-bar" style="background: var(--ok); width: 0%; height: 100%; transition: width 0.2s;"></div>
+        </div>
+      </div>
+      <div class="row end" style="margin-top: 14px;">
+        <button type="button" class="btn ghost" id="btn-file-unlock-cancel">Cancel</button>
+        <button type="button" class="btn primary" id="btn-file-unlock-submit">
+          <svg class="icon sm"><use href="#icon-lock-open"></use></svg> Unlock
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- ======================= REVEAL MODAL ======================= -->
   <div id="modal-reveal" class="overlay hidden">

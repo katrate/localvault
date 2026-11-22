@@ -22,4 +22,24 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.removeAllListeners('update-download-progress');
     ipcRenderer.on('update-download-progress', (_e, data) => callback(data));
   },
+  // File Locker
+  flLock: (data) => ipcRenderer.invoke('fl-lock', data),
+  flUnlock: (data) => ipcRenderer.invoke('fl-unlock', data),
+  flGetPending: () => ipcRenderer.invoke('fl-get-pending'),
+  flBrowse: (data) => ipcRenderer.invoke('fl-browse', data),
+  flList: () => ipcRenderer.invoke('fl-list'),
+  flAddRecord: (data) => ipcRenderer.invoke('fl-add-record', data),
+  flRemoveRecord: (data) => ipcRenderer.invoke('fl-remove-record', data),
+  onFlLockProgress: (callback) => {
+    ipcRenderer.removeAllListeners('fl-lock-progress');
+    ipcRenderer.on('fl-lock-progress', (_e, data) => callback(data));
+  },
+  onFlUnlockProgress: (callback) => {
+    ipcRenderer.removeAllListeners('fl-unlock-progress');
+    ipcRenderer.on('fl-unlock-progress', (_e, data) => callback(data));
+  },
+  onFlOpenLockFile: (callback) => {
+    ipcRenderer.removeAllListeners('fl-open-lock-file');
+    ipcRenderer.on('fl-open-lock-file', (_e, lockPath) => callback(lockPath));
+  },
 });

@@ -24,6 +24,7 @@
       "main.js",
       "preload.js",
       "vault.js",
+      "file-locker.js",
       "renderer/**/*",
       "assets/**/*",
       "package.json"

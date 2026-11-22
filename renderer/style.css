@@ -733,6 +733,138 @@ kbd {
 }
 .about-card li strong { color: var(--text); }
 
+/* ------------------------------ File Locker ------------------------------ */
+
+.fl-dropzone {
+  border: 2px dashed var(--line);
+  border-radius: 14px;
+  padding: 28px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  background: rgba(9, 17, 32, 0.4);
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.fl-dropzone:hover,
+.fl-dropzone.drag-over {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.07);
+}
+.fl-dropzone.drag-over {
+  border-color: var(--ok);
+  background: rgba(52, 211, 153, 0.08);
+}
+
+.fl-path-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.fl-path-row input {
+  flex: 1;
+  font-size: 13px;
+}
+
+.fl-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  color: #93c5fd;
+}
+.fl-preview-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.fl-pass-row label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.filelock-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  margin: 12px 0 16px;
+}
+
+/* Locked items list */
+.fl-locked-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.fl-locked-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(9, 17, 32, 0.6);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.fl-locked-info {
+  flex: 1;
+  min-width: 0;
+}
+.fl-locked-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text);
+  word-break: break-all;
+}
+.fl-locked-path {
+  word-break: break-all;
+  margin-top: 2px;
+}
+.fl-locked-date {
+  margin-top: 2px;
+}
+.fl-locked-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.fl-locked-actions .btn.icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  transition: all 0.15s ease;
+}
+.fl-locked-actions .btn.icon:hover {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--accent);
+}
+.fl-locked-actions .btn.icon.danger:hover {
+  color: #fecaca;
+  background: rgba(248, 113, 113, 0.2);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
 /* Toast */
 .toast {
   position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);

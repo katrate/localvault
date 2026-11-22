@@ -135,6 +135,22 @@ async function init() {
     console.error('bindUpdateEvents error:', e);
   }
 
+  try {
+    initFileLock();
+  } catch (e) {
+    console.error('initFileLock error:', e);
+  }
+
+  // On startup, check if opened with a .lvlock file
+  setTimeout(async () => {
+    try {
+      const pending = await api.flGetPending();
+      if (pending && pending.ok && pending.lockPath) {
+        openFileUnlockModal(pending.lockPath);
+      }
+    } catch { /* ignore */ }
+  }, 500);
+
   // Check for auto-update silently on startup
   setTimeout(checkAppUpdate, 1500);
 
@@ -987,8 +1003,295 @@ function initAutoLock() {
   }, 2000);
 }
 
-/* ------------------------------ auto-updater ------------------------------ */
+/* ------------------------------ file locker UI ------------------------------ */
 
+let flSelectedPath = null;
+let flLockedItems = [];
+
+function initFileLock() {
+  // Open file lock modal from topbar button
+  $('#btn-filelock').addEventListener('click', () => {
+    openFileLockModal();
+  });
+
+  // Tab switching inside file lock modal
+  $$('[data-filetab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      $$('[data-filetab]').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tabId = btn.dataset.filetab;
+      $$('#modal-filelock .tab-pane').forEach((p) => {
+        p.classList.toggle('active', p.id === tabId);
+        p.classList.toggle('hidden', p.id !== tabId);
+      });
+      if (tabId === 'fl-tab-locked') renderLockedList();
+    });
+  });
+
+  // Browse file button
+  $('#fl-browse-btn').addEventListener('click', async () => {
+    const res = await api.flBrowse({ mode: 'file' });
+    if (!res.ok || res.canceled) return;
+    setFlSelectedPath(res.filePath);
+  });
+
+  // Drag & drop onto dropzone
+  const dropzone = $('#fl-dropzone');
+  dropzone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropzone.classList.add('drag-over');
+  });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('drag-over');
+    const item = e.dataTransfer.files[0];
+    if (item) setFlSelectedPath(item.path);
+  });
+
+  // Manual path input
+  $('#fl-path-input').addEventListener('input', () => {
+    const val = $('#fl-path-input').value.trim();
+    if (val) {
+      setFlSelectedPath(val, false); // don't set input field again
+    } else {
+      flSelectedPath = null;
+      $('#fl-selected-preview').classList.add('hidden');
+      $('#fl-lock-btn').disabled = true;
+    }
+  });
+
+  // Clear selection
+  $('#fl-clear-selection').addEventListener('click', () => {
+    flSelectedPath = null;
+    $('#fl-path-input').value = '';
+    $('#fl-selected-preview').classList.add('hidden');
+    $('#fl-lock-btn').disabled = true;
+    $('#fl-lock-error').textContent = '';
+  });
+
+  // Lock button
+  $('#fl-lock-btn').addEventListener('click', onFileLock);
+
+  // Unlock modal — cancel button
+  $('#btn-file-unlock-cancel').addEventListener('click', () => {
+    closeModal('#modal-file-unlock');
+    $('#file-unlock-pass').value = '';
+    $('#file-unlock-error').textContent = '';
+  });
+
+  // Unlock modal — submit
+  $('#btn-file-unlock-submit').addEventListener('click', onFileUnlock);
+  $('#file-unlock-pass').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') onFileUnlock();
+  });
+
+  // Listen for shell-opened .lvlock file (from second-instance or startup)
+  api.onFlOpenLockFile((lockPath) => {
+    openFileUnlockModal(lockPath);
+  });
+
+  // Set up lock/unlock progress listeners
+  api.onFlLockProgress((data) => {
+    const bar = $('#fl-lock-bar');
+    const status = $('#fl-lock-status');
+    if (bar) bar.style.width = Math.min(100, Math.round(data.percent || 0)) + '%';
+    if (status) status.textContent = data.phase === 'done' ? 'Locked!' : `Encrypting… ${Math.round(data.percent || 0)}%`;
+  });
+
+  api.onFlUnlockProgress((data) => {
+    const bar = $('#fl-unlock-bar');
+    const status = $('#fl-unlock-status');
+    if (bar) bar.style.width = Math.min(100, Math.round(data.percent || 0)) + '%';
+    if (status) status.textContent = data.phase === 'done' ? 'Unlocked!' : `Decrypting… ${Math.round(data.percent || 0)}%`;
+  });
+}
+
+function setFlSelectedPath(p, updateInput = true) {
+  flSelectedPath = p;
+  const name = p.split(/[\\/]/).pop() || p;
+  const isFolder = !name.includes('.');
+  $('#fl-preview-icon').innerHTML = `<use href="${isFolder ? '#icon-folder-lock' : '#icon-file-lock'}"></use>`;
+  $('#fl-preview-name').textContent = name;
+  $('#fl-selected-preview').classList.remove('hidden');
+  if (updateInput) $('#fl-path-input').value = p;
+  $('#fl-lock-btn').disabled = false;
+  $('#fl-lock-error').textContent = '';
+}
+
+async function openFileLockModal() {
+  // Check vault is unlocked
+  if (!loginId) {
+    toast('Please unlock the vault first to use File Lock.', 'err');
+    return;
+  }
+  // Reset state
+  flSelectedPath = null;
+  $('#fl-path-input').value = '';
+  $('#fl-selected-preview').classList.add('hidden');
+  $('#fl-lock-btn').disabled = true;
+  $('#fl-lock-error').textContent = '';
+  $('#fl-lock-pass').value = '';
+  $('#fl-lock-progress').classList.add('hidden');
+  $('#fl-lock-bar').style.width = '0%';
+  // Switch to Lock tab
+  $$('[data-filetab]').forEach((b) => b.classList.toggle('active', b.dataset.filetab === 'fl-tab-lock'));
+  $$('#modal-filelock .tab-pane').forEach((p) => {
+    p.classList.toggle('active', p.id === 'fl-tab-lock');
+    p.classList.toggle('hidden', p.id !== 'fl-tab-lock');
+  });
+  openModal('#modal-filelock');
+}
+
+async function onFileLock() {
+  const err = $('#fl-lock-error');
+  err.textContent = '';
+  const pass = $('#fl-lock-pass').value;
+  if (!flSelectedPath) return (err.textContent = 'Select a file or folder first.');
+  if (!pass) return (err.textContent = 'Enter your reveal pass.');
+
+  $('#fl-lock-btn').disabled = true;
+  $('#fl-lock-progress').classList.remove('hidden');
+  $('#fl-lock-status').textContent = 'Starting encryption…';
+  $('#fl-lock-bar').style.width = '0%';
+
+  const res = await api.flLock({ targetPath: flSelectedPath, revealPass: pass });
+  if (!res.ok) {
+    err.textContent = res.error;
+    $('#fl-lock-btn').disabled = false;
+    $('#fl-lock-progress').classList.add('hidden');
+    return;
+  }
+
+  // Save record
+  const name = flSelectedPath.split(/[\\/]/).pop();
+  await api.flAddRecord({
+    lockPath: res.lockPath,
+    originalName: name,
+    kind: res.lockPath.includes('.') ? 'file' : 'folder',
+    lockedAt: Date.now(),
+  });
+
+  $('#fl-lock-status').textContent = '✓ Locked successfully!';
+  $('#fl-lock-bar').style.width = '100%';
+  $('#fl-lock-pass').value = '';
+  flSelectedPath = null;
+
+  toast(`"${name}" locked → ${res.lockPath.split(/[\\/]/).pop()}`, 'good');
+
+  setTimeout(() => {
+    closeModal('#modal-filelock');
+    $('#fl-lock-progress').classList.add('hidden');
+    $('#fl-lock-btn').disabled = false;
+  }, 1200);
+}
+
+async function renderLockedList() {
+  const res = await api.flList();
+  flLockedItems = (res.ok && res.items) ? res.items : [];
+  const container = $('#fl-locked-list');
+  const noLocked = $('#fl-no-locked');
+
+  if (!flLockedItems.length) {
+    if (noLocked) noLocked.classList.remove('hidden');
+    container.innerHTML = '<p class="muted small-text" id="fl-no-locked">No locked items yet.</p>';
+    return;
+  }
+
+  container.innerHTML = flLockedItems.map((item) => `
+    <div class="fl-locked-item" data-id="${esc(item.id)}">
+      <svg class="icon sm" style="color: var(--accent); flex-shrink:0;"><use href="#icon-${item.kind === 'folder' ? 'folder-lock' : 'file-lock'}"></use></svg>
+      <div class="fl-locked-info">
+        <div class="fl-locked-name">${esc(item.originalName)}</div>
+        <div class="fl-locked-path muted small-text">${esc(item.lockPath)}</div>
+        <div class="fl-locked-date muted small-text">${fmtDate(item.lockedAt)}</div>
+      </div>
+      <div class="fl-locked-actions">
+        <button class="btn icon" data-fl-unlock="${esc(item.id)}" title="Unlock & restore">
+          ${icon('lock-open', 'sm')}
+        </button>
+        <button class="btn icon danger" data-fl-forget="${esc(item.id)}" title="Remove from list (file stays locked on disk)">
+          ${icon('trash-2', 'sm')}
+        </button>
+      </div>
+    </div>
+  `).join('');
+
+  // Bind unlock / forget buttons
+  $$('[data-fl-unlock]', container).forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const item = flLockedItems.find((x) => x.id === btn.dataset.flUnlock);
+      if (item) openFileUnlockModal(item.lockPath, item.id);
+    });
+  });
+  $$('[data-fl-forget]', container).forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.flForget;
+      await api.flRemoveRecord({ id });
+      toast('Removed from list (file stays locked on disk).', 'good');
+      renderLockedList();
+    });
+  });
+}
+
+// Pending unlock state
+let pendingUnlockLockPath = null;
+let pendingUnlockRecordId = null;
+
+function openFileUnlockModal(lockPath, recordId = null) {
+  pendingUnlockLockPath = lockPath;
+  pendingUnlockRecordId = recordId;
+  const name = (lockPath || '').split(/[\\/]/).pop();
+  $('#file-unlock-name').textContent = `File: ${name}`;
+  $('#file-unlock-pass').value = '';
+  $('#file-unlock-error').textContent = '';
+  $('#fl-unlock-progress').classList.add('hidden');
+  $('#fl-unlock-bar').style.width = '0%';
+  openModal('#modal-file-unlock');
+  setTimeout(() => $('#file-unlock-pass').focus(), 60);
+}
+
+async function onFileUnlock() {
+  const err = $('#file-unlock-error');
+  err.textContent = '';
+  const pass = $('#file-unlock-pass').value;
+  if (!pass) return (err.textContent = 'Enter your reveal pass.');
+  if (!pendingUnlockLockPath) return;
+
+  $('#btn-file-unlock-submit').disabled = true;
+  $('#fl-unlock-progress').classList.remove('hidden');
+  $('#fl-unlock-status').textContent = 'Decrypting…';
+  $('#fl-unlock-bar').style.width = '0%';
+
+  const res = await api.flUnlock({ lockPath: pendingUnlockLockPath, revealPass: pass });
+  if (!res.ok) {
+    err.textContent = res.error;
+    $('#btn-file-unlock-submit').disabled = false;
+    $('#fl-unlock-progress').classList.add('hidden');
+    return;
+  }
+
+  $('#fl-unlock-bar').style.width = '100%';
+  $('#fl-unlock-status').textContent = '✓ Unlocked!';
+
+  // Remove db record if we have it
+  if (pendingUnlockRecordId) {
+    await api.flRemoveRecord({ id: pendingUnlockRecordId });
+  }
+
+  const restoredName = res.restoredPath.split(/[\\/]/).pop();
+  toast(`Unlocked → "${restoredName}" restored.`, 'good');
+
+  setTimeout(() => {
+    closeModal('#modal-file-unlock');
+    $('#btn-file-unlock-submit').disabled = false;
+    $('#fl-unlock-progress').classList.add('hidden');
+    // Re-render locked list if modal is open
+    if (!$('#fl-tab-locked').classList.contains('hidden')) renderLockedList();
+  }, 900);
+}
+
+/* ------------------------------ auto-updater ------------------------------ */
 let pendingUpdateAssetUrl = null;
 
 async function checkAppUpdate() {
