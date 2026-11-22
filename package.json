@@ -11,6 +11,7 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@electron/asar": "^4.3.2",
     "electron": "^45.4.1",
     "electron-builder": "^25.1.8"
   },
@@ -23,6 +24,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "preload-unlock.js",
       "vault.js",
       "file-locker.js",
       "renderer/**/*",
@@ -33,7 +35,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/logo.png"

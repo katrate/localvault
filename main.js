@@ -8,13 +8,15 @@ const V = require('./vault');
 const FL = require('./file-locker');
 
 let win = null;
+let unlockWin = null;         // small floating unlock dialog
+let pendingUnlockPath = null; // .lvlock path pending in the dialog
 let authed = false;
 let authedLoginId = '';
 let cfg = null;
 let lastSecret = '';
 let clipTimer = null;
 
-// Track if app was opened by double-clicking a .lvlock file
+// Track if app was opened by double-clicking a .lvlock file (used by main window)
 let openedLockFile = null;
 
 // Single instance lock — allows second-instance to send the .lvlock path to running instance
@@ -723,7 +725,95 @@ ipcMain.handle('download-and-install-update', async (_e, assetUrl) => {
   }
 });
 
-/* ------------------------------ window ------------------------------ */
+/* ------------------------------ Unlock Dialog Window ------------------------------ */
+
+function createUnlockDialog(lockFilePath) {
+  if (unlockWin && !unlockWin.isDestroyed()) {
+    // Already open — update the pending path and re-focus
+    pendingUnlockPath = lockFilePath;
+    unlockWin.focus();
+    return;
+  }
+
+  pendingUnlockPath = lockFilePath;
+  const iconPath = path.join(__dirname, 'assets', 'logo.png');
+
+  unlockWin = new BrowserWindow({
+    width: 390,
+    height: 300,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    backgroundColor: '#0f172a',
+    title: 'Unlock File — LocalVault',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    frame: true,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-unlock.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  unlockWin.removeMenu();
+  unlockWin.loadFile(path.join(__dirname, 'renderer', 'unlock-dialog.html'));
+  unlockWin.once('ready-to-show', () => unlockWin.show());
+
+  // Block external navigation
+  unlockWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  unlockWin.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://')) event.preventDefault();
+  });
+
+  unlockWin.on('closed', () => {
+    unlockWin = null;
+    pendingUnlockPath = null;
+    // If this was the only window and no main win, quit
+    if (!win || win.isDestroyed()) {
+      app.quit();
+    }
+  });
+}
+
+// IPC handlers for the unlock dialog
+ipcMain.handle('unlock-dialog-get-path', () => pendingUnlockPath);
+
+ipcMain.handle('unlock-dialog-unlock', async (_e, revealPass) => {
+  try {
+    if (!pendingUnlockPath) return fail('No file path set.');
+    if (!revealPass) return fail('Password is required.');
+    if (!fs.existsSync(pendingUnlockPath)) return fail('File not found.');
+
+    const restoredPath = FL.unlockItem(pendingUnlockPath, revealPass, () => {});
+
+    // Also remove from locked records DB if present (best-effort, no auth needed here)
+    try {
+      const db = loadDb();
+      if (db.lockedFiles) {
+        db.lockedFiles = db.lockedFiles.filter((x) => x.lockPath !== pendingUnlockPath);
+        saveDb(db);
+      }
+    } catch { /* ignore */ }
+
+    return ok({ restoredPath });
+  } catch (e) {
+    return fail(e.message);
+  }
+});
+
+ipcMain.on('unlock-dialog-cancel', () => {
+  if (unlockWin && !unlockWin.isDestroyed()) unlockWin.close();
+});
+
+ipcMain.on('unlock-dialog-done', () => {
+  if (unlockWin && !unlockWin.isDestroyed()) unlockWin.close();
+});
+
+/* ------------------------------ Main Window ------------------------------ */
 
 function createWindow(lockFilePath) {
   const iconPath = path.join(__dirname, 'assets', 'logo.png');
@@ -769,28 +859,35 @@ function createWindow(lockFilePath) {
 }
 
 app.whenReady().then(() => {
-  // Check if opened with a .lvlock file argument (double-click from Explorer)
   const args = process.argv.slice(app.isPackaged ? 1 : 2);
   const lockArg = args.find((a) => a.endsWith('.lvlock') && fs.existsSync(a));
 
   registerShellAssociation();
-  createWindow(lockArg || null);
+
+  if (lockArg) {
+    // Opened by double-clicking a .lvlock file — show ONLY the small unlock dialog
+    createUnlockDialog(lockArg);
+  } else {
+    // Normal launch — open the full app
+    createWindow(null);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
-// Handle second-instance: if user double-clicks another .lvlock while app is running
+// Second-instance: another .lvlock double-clicked while app is already running
 app.on('second-instance', (_e, argv) => {
   const args = argv.slice(app.isPackaged ? 1 : 2);
   const lockArg = args.find((a) => a.endsWith('.lvlock') && fs.existsSync(a));
-  if (win) {
+
+  if (lockArg) {
+    // Always show the small dialog for file unlocks, regardless of whether main win is open
+    createUnlockDialog(lockArg);
+  } else if (win) {
     if (win.isMinimized()) win.restore();
     win.focus();
-    if (lockArg) {
-      win.webContents.send('fl-open-lock-file', lockArg);
-    }
   }
 });
 
