@@ -542,9 +542,10 @@ function registerShellAssociation() {
       : `"${exePath}" "${path.resolve(__dirname)}" "%1"`;
 
     // Lock command for right-click context menu (lock dialog)
+    // Use --lock-path="%1" (= style) so Electron can't inject flags between --lock and the path
     const lockCmd = isPackaged
-      ? `"${exePath}" "--lock" "%1"`
-      : `"${exePath}" "${path.resolve(__dirname)}" "--lock" "%1"`;
+      ? `"${exePath}" "--lock-path=%1"`
+      : `"${exePath}" "${path.resolve(__dirname)}" "--lock-path=%1"`;
 
     const reg = (args) => require('child_process').spawnSync('reg', args, { stdio: 'pipe' });
 
@@ -945,16 +946,25 @@ function createWindow(lockFilePath) {
   });
 }
 
+// Find the target path for --lock flag, skipping any --electron-flags injected by Electron
+function findLockTarget(args) {
+  const idx = args.indexOf('--lock');
+  if (idx === -1) {
+    // Also support --lock-path=C:\path\file style (more robust, avoids flag injection)
+    const eq = args.find((a) => a.startsWith('--lock-path='));
+    return eq ? eq.slice(12) : null;
+  }
+  // Skip any --flags Electron injects after --lock; return first real path arg
+  for (let i = idx + 1; i < args.length; i++) {
+    if (!args[i].startsWith('-')) return args[i];
+  }
+  return null;
+}
+
 app.whenReady().then(() => {
   const args = process.argv.slice(app.isPackaged ? 1 : 2);
   const lockArg = args.find((a) => a.endsWith('.lvlock') && fs.existsSync(a));
-  const lockFileArg = (() => {
-    const idx = args.indexOf('--lock');
-    if (idx !== -1 && args[idx + 1]) return args[idx + 1];
-    // Also support: LocalVault.exe --lock "C:\path\file.txt"
-    const flag = args.find((a) => a.startsWith('--lock='));
-    return flag ? flag.slice(7) : null;
-  })();
+  const lockFileArg = findLockTarget(args);
 
   registerShellAssociation();
 
@@ -978,8 +988,7 @@ app.whenReady().then(() => {
 app.on('second-instance', (_e, argv) => {
   const args = argv.slice(app.isPackaged ? 1 : 2);
   const lockArg = args.find((a) => a.endsWith('.lvlock') && fs.existsSync(a));
-  const lockFileIdx = args.indexOf('--lock');
-  const lockFileArg = lockFileIdx !== -1 ? args[lockFileIdx + 1] : null;
+  const lockFileArg = findLockTarget(args);
 
   if (lockFileArg) {
     // Right-click lock from Explorer while app is running
